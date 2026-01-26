@@ -1,0 +1,63 @@
+---
+alwaysApply: true
+---
+
+project:
+name: accomtz
+description: >
+REST API backend for Accomtz property booking app.
+Handles authentication, property management, booking logic,
+and agent verification. Built with Node.js, Express, MongoDB Atlas,
+and Cloudinary.
+
+tech_stack:
+
+- Node.js
+- Express
+- javascript
+- MongoDB Atlas (Mongoose)
+- Cloudinary
+- JWT Authentication
+- Multer for uploads
+
+conventions:
+
+- Use plain javascript everywhere .
+- Use async/await in all controller functions.
+- Separate logic into routes, controllers, and services.
+- Use proper HTTP codes (200, 400, 401, 404, 500).
+- Use ESLint + Prettier for formatting and linting.
+- Use `dotenv` for all environment variables.
+- Always return JSON responses with `{ success, message, data }` format.
+
+folder_structure:
+
+- src/
+  - config/
+  - controllers/
+  - middleware/
+  - models/
+  - routes/
+  - utils/
+  - server.js
+
+libraries:
+
+- express
+- mongoose
+- jsonwebtoken
+- bcryptjs
+- multer
+- cloudinary
+- cors
+- dotenv
+
+ai_rules:
+
+- When generating routes, use `Router()` and export default.
+- Always define TypeScript interfaces for MongoDB models.
+- Implement authentication via middleware using JWT.
+- When uploading files, integrate with Cloudinary.
+- Always validate inputs (e.g., name, email, password).
+- Prefer modular imports, avoid mixing logic.
+- Use `try/catch` around async functions with proper error handling.
