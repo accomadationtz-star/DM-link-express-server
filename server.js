@@ -5,8 +5,9 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import userRoutes from "./routes/userRoutes.js";
 import propertyRoutes from "./routes/propertyRoutes.js";
-
 import requestLogger from "./middlewares/requestLogger.js";
+import inquiryRoutes from "./routes/inquiryRoutes.js";
+import agentDashboardRoutes from "./routes/agentDashboardRoutes.js";
 
 dotenv.config();
 const app = express();
@@ -36,6 +37,8 @@ mongoose
 
 app.use("/api/users", userRoutes);
 app.use("/api/properties", propertyRoutes);
+app.use("/api/inquiries", inquiryRoutes);
+app.use("/api/agent", agentDashboardRoutes);
 
 // Global error handler
 app.use((err, req, res, next) => {

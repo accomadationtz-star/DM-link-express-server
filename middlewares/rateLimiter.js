@@ -16,7 +16,7 @@ export const registrationRateLimiter = rateLimit({
 
 export const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 attempts
+  max: 15, // 15 attempts
   message: { 
     success: false, 
     message: "Too many login attempts, please try again later",

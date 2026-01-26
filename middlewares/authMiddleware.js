@@ -65,10 +65,12 @@ export const auth = async (req, res, next) => {
 
     // Attach user to request
     req.user = {
+      _id: user._id, 
       id: user._id.toString(),
       username: user.username,
       email: user.email,
       role: user.role,
+      phoneNumber: user.phoneNumber,
     };
 
     next();
