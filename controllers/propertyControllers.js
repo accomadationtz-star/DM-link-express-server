@@ -281,6 +281,72 @@ export const getProperties = async (req, res) => {
 };
 
 /**
+ * @desc    Get all properties
+ * @route   GET /api/properties/all
+ * @access  Public
+ */
+export const getAllProperties = async (req, res) => {
+  try {
+    const { page = 1, limit = 10 } = req.query;
+
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const properties = await Property.find()
+      .limit(Number(limit))
+      .skip(skip)
+      .sort({ createdAt: -1 });
+
+    const count = await Property.countDocuments();
+
+    res.status(200).json({
+      success: true,
+      data: properties,
+      totalPages: Math.ceil(count / limit),
+      currentPage: Number(page),
+      total: count,
+    });
+  } catch (error) {
+    console.error('Error fetching all properties:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+  }
+};
+
+/**
+ * @desc    Get single property details
+ * @route   GET /api/properties/:id
+ * @access  Public
+ */
+export const getPropertyDetails = async (req, res) => {
+  try {
+    const property = await Property.findById(req.params.id).populate(
+      'ownerId',
+      'name email phoneNumber'
+    );
+
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: property,
+    });
+  } catch (error) {
+    console.error('Error fetching property:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+  }
+};
+
+/**
  * @desc    Get single property
  * @route   GET /api/properties/:id
  * @access  Public

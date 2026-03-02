@@ -1,7 +1,7 @@
 import express from 'express';
 import { upload } from '../middlewares/multer.js';
 import { uploadMedia, handleMulterError } from '../middlewares/uploadMiddleware.js';
-import { uploadProperty, getProperties } from '../controllers/propertyControllers.js';
+import { uploadProperty, getProperties, getAllProperties, getPropertyDetails } from '../controllers/propertyControllers.js';
 import { debugRequest, debugAfterMulter, debugError } from '../middlewares/debug.js';
 import {
    auth, 
@@ -25,6 +25,19 @@ router.get(
   getProperties
 );
 
+// Get all properties list
+router.get(
+  "/all",
+  generalLimiter,
+  getAllProperties
+);
+
+// Get property details by ID
+router.get(
+  "/:id",
+  generalLimiter,
+  getPropertyDetails
+);
 
 // ==================== AUTHENTICATED USER ROUTES ====================
 // Require login
