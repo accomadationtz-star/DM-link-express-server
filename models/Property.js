@@ -90,6 +90,11 @@ const propertySchema = new mongoose.Schema(
       enum: ['available', 'booked', 'sold', 'rented'],
       default: 'available',
     },
+    inquiryCount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   { timestamps: true }
 );

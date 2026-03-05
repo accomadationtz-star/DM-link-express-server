@@ -1,4 +1,3 @@
-import e from "express";
 import Inquiry from "../models/Inquiry.js";
 import Property from "../models/Property.js";
 import User from "../models/User.js";
@@ -92,6 +91,13 @@ export const createInquiry = async (req, res) => {
       });
     }
 
+    if (["booked", "sold", "rented"].includes(property.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `This property is ${property.status} and unavailable for inquiry`,
+      });
+    }
+
     if (property.ownerId.toString() === userId.toString()) {
       return res.status(400).json({
         success: false,
@@ -127,32 +133,38 @@ export const createInquiry = async (req, res) => {
         ? `Client is requesting to rent this ${property.type}.`
         : `Client is requesting to buy this ${property.type}.`;
 
-    // Send SMS to the agent
+    // Send SMS to the agent (non-blocking)
+    let smsSent = false;
     const agent = await User.findById(property.ownerId);
     if (agent && agent.phoneNumber) {
       try {
-        // Format phone number to international format (e.g., +256700123456)
+        // Format phone number to Tanzanian international format (+255...)
         const formatPhoneNumber = (phone) => {
           let cleaned = phone.replace(/[\s\-()]/g, '');
-          if (!cleaned.startsWith('+')) {
-            if (cleaned.startsWith('0')) {
-              cleaned = '+256' + cleaned.substring(1);
-            } else if (!cleaned.startsWith('256')) {
-              cleaned = '+256' + cleaned;
-            } else {
-              cleaned = '+' + cleaned;
-            }
+          
+          // Handle cases: 0712345678, 0612345678, 712345678, 255712345678, +255712345678
+          if (cleaned.startsWith('+255')) {
+            return cleaned; // Already formatted
+          } else if (cleaned.startsWith('255')) {
+            return '+' + cleaned; // Add + prefix
+          } else if (cleaned.startsWith('0')) {
+            return '+255' + cleaned.substring(1); // Replace 0 with +255
+          } else if (cleaned.startsWith('6') || cleaned.startsWith('7')) {
+            return '+255' + cleaned; // Add +255 prefix
+          } else {
+            return '+255' + cleaned; // Default: add +255
           }
-          return cleaned;
         };
         
         const smsMessage = `New inquiry on DM Link for your property "${property.title}": ${message} Client Phone: ${req.user.phoneNumber}`;
         const formattedPhone = formatPhoneNumber(agent.phoneNumber);
         console.log("Sending SMS to agent:", formattedPhone);
-        await sendSMS({ to: "+255625358254", message: smsMessage });
-        console.log("SMS sent to agent:", agent.phoneNumber);
+        await sendSMS({ to: formattedPhone, message: smsMessage });
+        console.log("SMS sent successfully to agent:", formattedPhone);
+        smsSent = true;
       } catch (smsError) {
         console.error("Failed to send SMS to agent:", smsError);
+        // Continue with inquiry creation even if SMS fails
       }
     }
     const inquiry = await Inquiry.create({
@@ -183,9 +195,19 @@ export const createInquiry = async (req, res) => {
       message,
     });
 
+    await Property.findByIdAndUpdate(
+      propertyId,
+      { $inc: { inquiryCount: 1 } },
+      { new: true }
+    );
+
     return res.status(201).json({
       success: true,
+      message: smsSent 
+        ? "Inquiry created successfully"
+        : "Inquiry created successfully, but SMS notification failed",
       data: inquiry,
+      smsNotificationSent: smsSent,
     });
   } catch (error) {
     console.error(error);

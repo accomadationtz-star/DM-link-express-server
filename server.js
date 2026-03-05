@@ -36,6 +36,7 @@ mongoose
   .catch(error => console.log(error));
 
 app.use("/api/users", userRoutes);
+app.use("/api/auth", userRoutes);
 app.use("/api/properties", propertyRoutes);
 app.use("/api/inquiries", inquiryRoutes);
 app.use("/api/agent", agentDashboardRoutes);

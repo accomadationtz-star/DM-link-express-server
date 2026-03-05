@@ -1,7 +1,7 @@
 import express from 'express';
 import { upload } from '../middlewares/multer.js';
 import { uploadMedia, handleMulterError } from '../middlewares/uploadMiddleware.js';
-import { uploadProperty, getProperties, getAllProperties, getPropertyDetails } from '../controllers/propertyControllers.js';
+import { uploadProperty, getProperties, getAllProperties, getPropertyDetails, updateProperty, deleteProperty, updatePropertyStatus } from '../controllers/propertyControllers.js';
 import { debugRequest, debugAfterMulter, debugError } from '../middlewares/debug.js';
 import {
    auth, 
@@ -28,6 +28,8 @@ router.get(
 // Get all properties list
 router.get(
   "/all",
+  auth,
+  authorize('admin'),
   generalLimiter,
   getAllProperties
 );
@@ -51,6 +53,31 @@ router.post(
   handleMulterError, 
   uploadProperty
 );
+
+// Update property status (owner only) - MUST come before /:id route
+router.patch(
+  '/:id/status',
+  auth, // Must be logged in
+  generalLimiter,
+  updatePropertyStatus
+);
+
+// Update property details (owner only)
+router.patch(
+  '/:id',
+  auth, // Must be logged in
+  generalLimiter,
+  updateProperty
+);
+
+// Delete property (owner only)
+router.delete(
+  '/:id',
+  auth, // Must be logged in
+  generalLimiter,
+  deleteProperty
+);
+
 router.use(debugError);
 export default router;
 

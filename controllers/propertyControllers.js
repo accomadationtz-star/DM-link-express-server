@@ -1,5 +1,6 @@
 import cloudinary from '../config/cloudinary.js';
 import Property from '../models/Property.js';
+import Inquiry from '../models/Inquiry.js';
 import fs from 'fs';
 import {
   uploadImageToCloudinary,
@@ -241,8 +242,8 @@ export const getProperties = async (req, res) => {
       limit = 10,
     } = req.query;
 
-    // Build query
-    const query = {};
+    // Build query (public endpoint should only expose available properties)
+    const query = { status: 'available' };
 
     if (type) query.type = type;
     if (purpose) query.purpose = purpose;
@@ -255,11 +256,14 @@ export const getProperties = async (req, res) => {
       if (maxPrice) query.price.$lte = Number(maxPrice);
     }
 
+    const pageNumber = Number(page);
+    const limitNumber = Number(limit);
+
     // Execute query with pagination
     const properties = await Property.find(query)
       .populate('ownerId', 'name email')
-      .limit(limit * 1)
-      .skip((page - 1) * limit)
+      .limit(limitNumber)
+      .skip((pageNumber - 1) * limitNumber)
       .sort({ createdAt: -1 });
 
     const count = await Property.countDocuments(query);
@@ -267,8 +271,8 @@ export const getProperties = async (req, res) => {
     res.status(200).json({
       success: true,
       data: properties,
-      totalPages: Math.ceil(count / limit),
-      currentPage: page,
+      totalPages: Math.ceil(count / limitNumber),
+      currentPage: pageNumber,
       total: count,
     });
   } catch (error) {
@@ -308,6 +312,43 @@ export const getAllProperties = async (req, res) => {
   } catch (error) {
     console.error('Error fetching all properties:', error);
     res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+  }
+};
+
+/**
+ * @desc    Get authenticated agent properties
+ * @route   GET /api/agent/properties
+ * @access  Private (Agent)
+ */
+export const getAgentProperties = async (req, res) => {
+  try {
+    const { page = 1, limit = 10 } = req.query;
+    const pageNumber = Number(page);
+    const limitNumber = Number(limit);
+    const skip = (pageNumber - 1) * limitNumber;
+
+    const query = { ownerId: req.user.id };
+
+    const properties = await Property.find(query)
+      .limit(limitNumber)
+      .skip(skip)
+      .sort({ createdAt: -1 });
+
+    const count = await Property.countDocuments(query);
+
+    return res.status(200).json({
+      success: true,
+      data: properties,
+      totalPages: Math.ceil(count / limitNumber),
+      currentPage: pageNumber,
+      total: count,
+    });
+  } catch (error) {
+    console.error('Error fetching agent properties:', error);
+    return res.status(500).json({
       success: false,
       message: 'Server error',
     });
@@ -379,14 +420,17 @@ export const getProperty = async (req, res) => {
 };
 
 /**
- * @desc    Update property
- * @route   PUT /api/properties/:id
+ * @desc    Update property details (owner only)
+ * @route   PATCH /api/properties/:id
  * @access  Private
  */
 export const updateProperty = async (req, res) => {
   try {
-    const property = await Property.findById(req.params.id);
+    const { id } = req.params;
+    const userId = req.user.id;
 
+    // Verify ownership
+    const property = await Property.findById(id);
     if (!property) {
       return res.status(404).json({
         success: false,
@@ -394,43 +438,85 @@ export const updateProperty = async (req, res) => {
       });
     }
 
-    // Check ownership
-    if (property.listedBy && property.listedBy.toString() !== req.user._id.toString()) {
+    if (property.ownerId.toString() !== userId.toString()) {
       return res.status(403).json({
         success: false,
-        message: 'Not authorized to update this property',
+        message: 'You can only edit your own properties',
       });
     }
 
+    // Only allow certain fields to be updated
+    const { title, description, price, bedrooms, area } = req.body;
+
+    // Validate inputs
+    if (title === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Title is required',
+      });
+    }
+
+    if (price !== undefined && price < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Price cannot be negative',
+      });
+    }
+
+    if (bedrooms !== undefined && bedrooms < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Bedrooms cannot be negative',
+      });
+    }
+
+    if (area !== undefined && area <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Area must be greater than 0',
+      });
+    }
+
+    // Update only allowed fields
+    const updateData = {};
+    if (title !== undefined) updateData.title = title;
+    if (description !== undefined) updateData.description = description;
+    if (price !== undefined) updateData.price = price;
+    if (bedrooms !== undefined) updateData.bedrooms = bedrooms;
+    if (area !== undefined) updateData.area = area;
+
     const updatedProperty = await Property.findByIdAndUpdate(
-      req.params.id,
-      req.body,
+      id,
+      updateData,
       { new: true, runValidators: true }
     );
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: 'Property updated successfully',
       data: updatedProperty,
     });
   } catch (error) {
     console.error('Error updating property:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Error updating property',
     });
   }
 };
 
 /**
- * @desc    Delete property
+ * @desc    Delete property (owner only)
  * @route   DELETE /api/properties/:id
  * @access  Private
  */
 export const deleteProperty = async (req, res) => {
   try {
-    const property = await Property.findById(req.params.id);
+    const { id } = req.params;
+    const userId = req.user.id;
 
+    // Verify ownership
+    const property = await Property.findById(id);
     if (!property) {
       return res.status(404).json({
         success: false,
@@ -438,11 +524,10 @@ export const deleteProperty = async (req, res) => {
       });
     }
 
-    // Check ownership
-    if (property.listedBy && property.listedBy.toString() !== req.user._id.toString()) {
+    if (property.ownerId.toString() !== userId.toString()) {
       return res.status(403).json({
         success: false,
-        message: 'Not authorized to delete this property',
+        message: 'You can only delete your own properties',
       });
     }
 
@@ -459,17 +544,75 @@ export const deleteProperty = async (req, res) => {
       );
     }
 
-    await property.deleteOne();
+    // Delete property
+    await Property.findByIdAndDelete(id);
 
-    res.status(200).json({
+    // Delete related inquiries
+    await Inquiry.deleteMany({ propertyId: id });
+
+    return res.status(200).json({
       success: true,
       message: 'Property deleted successfully',
     });
   } catch (error) {
     console.error('Error deleting property:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: 'Error deleting property',
+    });
+  }
+};
+
+/**
+ * @desc    Update property status (owner only)
+ * @route   PATCH /api/properties/:id/status
+ * @access  Private
+ */
+export const updatePropertyStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    const userId = req.user.id;
+
+    // Validate status
+    const validStatuses = ['available', 'booked', 'sold', 'rented'];
+    if (!status || !validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status. Must be one of: ${validStatuses.join(', ')}`,
+      });
+    }
+
+    // Verify ownership
+    const property = await Property.findById(id);
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found',
+      });
+    }
+
+    if (property.ownerId.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only update status of your own properties',
+      });
+    }
+
+    // Update status
+    property.status = status;
+    await property.save();
+
+    return res.status(200).json({
+      success: true,
+      message: `Property status updated to ${status}`,
+      data: property,
+    });
+  } catch (error) {
+    console.error('Error updating property status:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error updating property status',
     });
   }
 };

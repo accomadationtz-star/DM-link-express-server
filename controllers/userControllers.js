@@ -1,25 +1,69 @@
 import User from "../models/User.js";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
+import { OAuth2Client } from "google-auth-library";
 import {
   signAccessToken,
   signRefreshToken,
+  signPendingToken,
   verifyRefreshToken,
+  verifyPendingToken,
   getCookieOptions,
 } from "../utils/jwt.js";
+
+const getGoogleAudience = () => {
+  return [
+    process.env.GOOGLE_WEB_CLIENT_ID,
+    process.env.GOOGLE_ANDROID_CLIENT_ID,
+    process.env.GOOGLE_IOS_CLIENT_ID,
+    ...(process.env.GOOGLE_CLIENT_IDS
+      ? process.env.GOOGLE_CLIENT_IDS.split(",").map(id => id.trim())
+      : []),
+  ].filter(Boolean);
+};
+
+const googleClient = new OAuth2Client();
 
 const registerUser = async (req, res) => {
   try {
     const { username, email, phoneNumber, password } = req.body;
 
+    // Validate all required fields
+    if (!username || !email || !phoneNumber || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Username, email, phone number, and password are required",
+        data: null,
+      });
+    }
+
+    // Validate phone format (9-15 digits)
+    const digits = phoneNumber.replace(/\D/g, "");
+    if (digits.length < 9 || digits.length > 15) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number must be 9-15 digits",
+        code: "INVALID_PHONE",
+        data: null,
+      });
+    }
+
+    const normalizedPhone = digits;
+
+    // Check for duplicates (username, email, phoneNumber)
     const existingUser = await User.findOne({
-      $or: [{ email }, { phoneNumber }],
+      $or: [{ username }, { email }, { phoneNumber: normalizedPhone }],
     });
 
     if (existingUser) {
-      return res.status(400).json({
+      let field = "username";
+      if (existingUser.email === email) field = "email";
+      if (existingUser.phoneNumber === normalizedPhone) field = "phoneNumber";
+
+      return res.status(409).json({
         success: false,
-        message: "User already exists with provided email or phone number",
+        message: `${field} already exists`,
+        code: `DUPLICATE_${field.toUpperCase()}`,
         data: null,
       });
     }
@@ -27,9 +71,11 @@ const registerUser = async (req, res) => {
     const user = await User.create({
       username,
       email,
-      phoneNumber,
+      phoneNumber: normalizedPhone,
       password,
+      authProvider: "local",
       role: "user",
+      onboardingComplete: true, // Email/password users complete registration with phone
     });
 
     return res.status(201).json({
@@ -62,6 +108,14 @@ const loginUser = async (req, res) => {
       return res.status(401).json({
         success: false,
         message: "Invalid credentials",
+        data: null,
+      });
+    }
+
+    if (user.authProvider === "google") {
+      return res.status(401).json({
+        success: false,
+        message: "This account uses Google login. Please continue with Google.",
         data: null,
       });
     }
@@ -149,6 +203,24 @@ const me = async (req, res) => {
       data: null,
     });
   }
+};
+
+const generateUniqueUsername = async (name = "User") => {
+  const cleaned = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .slice(0, 20);
+  const base = cleaned || "user";
+
+  let candidate = base;
+  let counter = 1;
+
+  while (await User.findOne({ username: candidate })) {
+    candidate = `${base}${counter}`;
+    counter += 1;
+  }
+
+  return candidate;
 };
 
 const parseDurationMs = value => {
@@ -262,6 +334,258 @@ const refreshTokenController = async (req, res) => {
     });
   }
 };
+
+const googleAuth = async (req, res) => {
+  try {
+    const { idToken } = req.body;
+
+    if (!idToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Google idToken is required",
+        data: null,
+      });
+    }
+
+    const googleAudience = getGoogleAudience();
+
+    if (googleAudience.length === 0) {
+      return res.status(500).json({
+        success: false,
+        message: "Google auth is not configured on server",
+        data: null,
+      });
+    }
+
+    let ticket;
+    try {
+      ticket = await googleClient.verifyIdToken({
+        idToken,
+        audience: googleAudience,
+      });
+    } catch (verifyError) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Google token",
+        data: null,
+      });
+    }
+
+    const payload = ticket.getPayload();
+    const { email, name, picture, sub, email_verified } = payload || {};
+
+    if (!email || !sub || !email_verified) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Google token payload",
+        data: null,
+      });
+    }
+
+    // Find user by googleId ONLY (not by email to avoid conflicts with email/password users)
+    let user = await User.findOne({ googleId: sub });
+
+    if (!user) {
+      const username = await generateUniqueUsername(name || email.split("@")[0]);
+      user = await User.create({
+        email,
+        username,
+        picture: picture || null,
+        googleId: sub,
+        authProvider: "google",
+        role: "user",
+        onboardingComplete: false, // Not complete until phone is added
+      });
+    } else {
+      // Update picture if provided
+      if (picture && user.picture !== picture) {
+        await User.findByIdAndUpdate(user._id, { picture });
+      }
+    }
+
+    // Check if user has completed onboarding (has phone number)
+    if (user.phoneNumber && user.onboardingComplete) {
+      // User has phone, issue full session
+      const accessToken = signAccessToken({ id: user._id, role: user.role });
+      const refreshToken = signRefreshToken({ id: user._id });
+
+      const refreshTokenHash = crypto
+        .createHash("sha256")
+        .update(refreshToken)
+        .digest("hex");
+
+      const refreshExpiry = new Date(
+        Date.now() + parseDurationMs(process.env.REFRESH_TOKEN_EXPIRES || "30d")
+      );
+
+      await User.findByIdAndUpdate(user._id, {
+        refreshTokenHash,
+        refreshTokenExpiresAt: refreshExpiry,
+      });
+
+      const cookieOpts = getCookieOptions();
+      res.cookie("accessToken", accessToken, {
+        ...cookieOpts,
+        maxAge: parseDurationMs(process.env.ACCESS_TOKEN_EXPIRES || "15m"),
+      });
+      res.cookie("refreshToken", refreshToken, {
+        ...cookieOpts,
+        maxAge: parseDurationMs(process.env.REFRESH_TOKEN_EXPIRES || "30d"),
+      });
+
+      return res.status(200).json({
+        success: true,
+        status: "completed",
+        message: "Google authentication successful",
+        data: {
+          accessToken,
+          refreshToken,
+          user: {
+            id: user._id.toString(),
+            username: user.username,
+            email: user.email,
+            phoneNumber: user.phoneNumber,
+            role: user.role,
+          },
+        },
+      });
+    } else {
+      // User missing phone, issue pending token
+      const pendingToken = signPendingToken({
+        sub: user._id.toString(),
+        type: "pending",
+        email: user.email,
+        googleId: user.googleId,
+      });
+
+      return res.status(200).json({
+        success: true,
+        status: "requiresPhone",
+        message: "Phone completion required",
+        data: {
+          pendingToken,
+          user: {
+            id: user._id.toString(),
+            email: user.email,
+            googleId: user.googleId,
+          },
+          phoneRequired: true,
+        },
+      });
+    }
+  } catch (error) {
+    console.error("Google auth error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      data: null,
+    });
+  }
+};
+const completePhone = async (req, res) => {
+  try {
+    const { phoneNumber } = req.body;
+    const userId = req.auth?.sub; // From pending token middleware
+
+    if (!phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number is required",
+        data: null,
+      });
+    }
+
+    // Validate phone format (9-15 digits)
+    const digits = phoneNumber.replace(/\D/g, "");
+    if (digits.length < 9 || digits.length > 15) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number must be 9-15 digits",
+        code: "INVALID_PHONE",
+        data: null,
+      });
+    }
+
+    const normalizedPhone = digits;
+
+    // Check if phone already exists (unique constraint)
+    const existingUser = await User.findOne({ phoneNumber: normalizedPhone });
+    if (existingUser && existingUser._id.toString() !== userId) {
+      return res.status(409).json({
+        success: false,
+        message: "Phone number already registered",
+        code: "PHONE_DUPLICATE",
+        data: null,
+      });
+    }
+
+    // Update user with phone and mark onboarding complete
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+        data: null,
+      });
+    }
+
+    user.phoneNumber = normalizedPhone;
+    user.onboardingComplete = true;
+    await user.save();
+
+    // Issue full session tokens
+    const accessToken = signAccessToken({ id: user._id, role: user.role });
+    const refreshToken = signRefreshToken({ id: user._id });
+
+    const refreshTokenHash = crypto
+      .createHash("sha256")
+      .update(refreshToken)
+      .digest("hex");
+
+    const refreshExpiry = new Date(
+      Date.now() + parseDurationMs(process.env.REFRESH_TOKEN_EXPIRES || "30d")
+    );
+
+    await User.findByIdAndUpdate(user._id, {
+      refreshTokenHash,
+      refreshTokenExpiresAt: refreshExpiry,
+    });
+
+    const cookieOpts = getCookieOptions();
+    res.cookie("accessToken", accessToken, {
+      ...cookieOpts,
+      maxAge: parseDurationMs(process.env.ACCESS_TOKEN_EXPIRES || "15m"),
+    });
+    res.cookie("refreshToken", refreshToken, {
+      ...cookieOpts,
+      maxAge: parseDurationMs(process.env.REFRESH_TOKEN_EXPIRES || "30d"),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Phone number verified",
+      data: {
+        accessToken,
+        refreshToken,
+        user: {
+          id: user._id.toString(),
+          username: user.username,
+          email: user.email,
+          phoneNumber: user.phoneNumber,
+          role: user.role,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Phone completion error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to complete phone verification",
+      data: null,
+    });
+  }
+};
+
 const logout = async (req, res) => {
   try {
     const provided = req.body.refreshToken || req.cookies?.refreshToken;
@@ -291,6 +615,6 @@ const logout = async (req, res) => {
 };
 
 
-export { registerUser, loginUser, me, refreshTokenController, logout };
+export { registerUser, loginUser, me, refreshTokenController, completePhone, logout, googleAuth };
 
 

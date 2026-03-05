@@ -62,3 +62,16 @@ const loginValidationRules = [
 
 export { loginValidationRules };
 
+const googleAuthValidationRules = [
+  body("idToken")
+    .isString()
+    .withMessage("idToken must be a string")
+    .trim()
+    .notEmpty()
+    .withMessage("idToken is required")
+    .matches(/^[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+$/)
+    .withMessage("idToken must be a valid JWT format"),
+];
+
+export { googleAuthValidationRules };
+

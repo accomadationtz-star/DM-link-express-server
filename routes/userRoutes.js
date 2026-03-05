@@ -1,12 +1,13 @@
 import { Router } from "express";
-import { registerUser, loginUser, me, refreshTokenController, logout } from "../controllers/userControllers.js";
+import { registerUser, loginUser, me, refreshTokenController, completePhone, logout, googleAuth } from "../controllers/userControllers.js";
 import {registrationRateLimiter, loginLimiter, refreshLimiter} from "../middlewares/rateLimiter.js";
 import {
   registerValidationRules,
   validationHandler,
   loginValidationRules,
+  googleAuthValidationRules,
 } from "../middlewares/validationMiddleware.js";
-import { auth, authorize, selfOrAdmin, requireActiveAccount } from "../middlewares/authMiddleware.js";
+import { auth, authorize, selfOrAdmin, requireActiveAccount, authorizePendingToken } from "../middlewares/authMiddleware.js";
 
 const router = Router();
 
@@ -26,6 +27,20 @@ router.post(
   loginValidationRules,
   validationHandler,
   loginUser
+);
+
+router.post(
+  "/google",
+  loginLimiter,
+  googleAuthValidationRules,
+  validationHandler,
+  googleAuth
+);
+
+router.post(
+  "/complete-phone",
+  authorizePendingToken,
+  completePhone
 );
 
 router.post(

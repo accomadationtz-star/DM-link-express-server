@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
+import { verifyPendingToken, verifyAccessToken } from "../utils/jwt.js";
 
 // ==================== BASIC AUTH MIDDLEWARE ====================
 // Verifies JWT token and attaches user to request
@@ -316,6 +317,137 @@ export const requireActiveAccount = async (req, res, next) => {
     return res.status(500).json({
       success: false,
       message: "Account verification failed.",
+      data: null,
+    });
+  }
+};
+
+// ==================== PENDING TOKEN AUTHORIZATION ====================
+// Validates pending token for phone completion flow
+
+export const authorizePendingToken = (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        message: "Missing or invalid authorization header",
+        data: null,
+      });
+    }
+
+    const token = authHeader.slice(7); // Remove 'Bearer '
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: "No token provided",
+        data: null,
+      });
+    }
+
+    let decoded;
+    try {
+      decoded = verifyPendingToken(token);
+    } catch (error) {
+      if (error.name === "TokenExpiredError") {
+        return res.status(401).json({
+          success: false,
+          message: "Session expired, please sign in again",
+          code: "PENDING_TOKEN_EXPIRED",
+          data: null,
+        });
+      }
+
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired token",
+        data: null,
+      });
+    }
+
+    // Verify token type is pending
+    if (decoded.type !== "pending") {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid token type",
+        data: null,
+      });
+    }
+
+    req.auth = decoded; // Attach decoded token to request
+    next();
+  } catch (error) {
+    console.error("Pending token authorization error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Token validation failed",
+      data: null,
+    });
+  }
+};
+
+// ==================== REQUIRE PHONE COMPLETION ====================
+// Middleware to check if user has completed phone requirement
+
+export const requirePhoneComplete = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        message: "No token provided",
+        data: null,
+      });
+    }
+
+    const token = authHeader.slice(7);
+
+    let decoded;
+    try {
+      decoded = verifyAccessToken(token);
+    } catch (error) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid token",
+        data: null,
+      });
+    }
+
+    // Check token is not a pending token
+    if (decoded.type === "pending") {
+      return res.status(403).json({
+        success: false,
+        message: "Phone verification required",
+        code: "PHONE_REQUIRED",
+        data: null,
+      });
+    }
+
+    // Check user has phone in token
+    if (!decoded.phoneNumber) {
+      return res.status(403).json({
+        success: false,
+        message: "Phone verification required",
+        code: "PHONE_REQUIRED",
+        data: null,
+      });
+    }
+
+    req.user = {
+      id: decoded.sub,
+      role: decoded.role,
+      phoneNumber: decoded.phoneNumber,
+    };
+
+    next();
+  } catch (error) {
+    console.error("Phone completion check error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Verification failed",
       data: null,
     });
   }

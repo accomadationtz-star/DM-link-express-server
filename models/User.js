@@ -9,6 +9,7 @@ const userSchema = new mongoose.Schema(
       trim: true,
       minlength: 3,
       maxlength: 50,
+      unique: true,
     },
     email: {
       type: String,
@@ -19,21 +20,45 @@ const userSchema = new mongoose.Schema(
     },
     phoneNumber: {
       type: String,
-      required: true,
+      required: function () {
+        return this.authProvider === "local";
+      },
       trim: true,
       unique: true,
+      sparse: true,
       minlength: 8,
       maxlength: 20,
     },
     password: {
       type: String,
-      required: true,
+      required: function () {
+        return this.authProvider === "local";
+      },
       minlength: 8,
+    },
+    authProvider: {
+      type: String,
+      enum: ["local", "google"],
+      default: "local",
+    },
+    googleId: {
+      type: String,
+      unique: true,
+      sparse: true,
+      default: null,
+    },
+    picture: {
+      type: String,
+      default: null,
     },
     role: {
       type: String,
       enum: ["user", "agent", "admin"],
       default: "user",
+    },
+    onboardingComplete: {
+      type: Boolean,
+      default: false,
     },
     refreshTokenHash: {
       type: String,
@@ -50,7 +75,7 @@ const userSchema = new mongoose.Schema(
 );
 
 userSchema.pre("save", async function hashPassword(next) {
-  if (!this.isModified("password")) return next();
+  if (!this.password || !this.isModified("password")) return next();
 
   try {
     const saltRounds = 10;
