@@ -31,6 +31,19 @@ export const refreshLimiter = rateLimit({
   max: 10,
 });
 
+export const agentApplicationSubmitLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  max: 1,
+  keyGenerator: req => req.user?.id || req.ip,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Only one application submission is allowed per day",
+    data: null,
+  },
+});
+
 // General limiter for all standard API requests
 export const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes

@@ -575,7 +575,7 @@ export const updatePropertyStatus = async (req, res) => {
     const userId = req.user.id;
 
     // Validate status
-    const validStatuses = ['available', 'booked', 'sold', 'rented'];
+    const validStatuses = ['available', 'rented', 'sold', 'pending'];
     if (!status || !validStatuses.includes(status)) {
       return res.status(400).json({
         success: false,

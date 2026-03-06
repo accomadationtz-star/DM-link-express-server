@@ -56,6 +56,20 @@ const userSchema = new mongoose.Schema(
       enum: ["user", "agent", "admin"],
       default: "user",
     },
+    agentApplicationStatus: {
+      type: String,
+      enum: ["none", "pending", "approved", "rejected"],
+      default: "none",
+      index: true,
+    },
+    agentApplicationDate: {
+      type: Date,
+      default: null,
+    },
+    agentRejectionReason: {
+      type: String,
+      default: null,
+    },
     onboardingComplete: {
       type: Boolean,
       default: false,

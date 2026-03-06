@@ -87,7 +87,7 @@ const propertySchema = new mongoose.Schema(
     media: [mediaSchema],
     status: {
       type: String,
-      enum: ['available', 'booked', 'sold', 'rented'],
+      enum: ['available', 'rented', 'sold', 'pending'],
       default: 'available',
     },
     inquiryCount: {
