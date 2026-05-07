@@ -1,11 +1,31 @@
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import Property from "../models/Property.js";
+import { normalizePropertyCommercialState } from "../utils/propertyCommercial.js";
 
 dotenv.config();
 
 const OWNER_ID = new mongoose.Types.ObjectId("6911bd4745a53dbc617e735a");
 const OWNER_USERNAME = "medusa";
+
+const createDefaultRentalTerms = minimumAdvanceMonths =>
+  normalizePropertyCommercialState({
+    purpose: 'rent',
+    price: 1,
+    rentalTerms: {
+      minimumAdvanceMonths,
+      viewingFee: {
+        required: false,
+        amount: 0,
+      },
+      agentFee: {
+        required: true,
+        mode: 'one_month_rent',
+        amount: null,
+      },
+      notes: null,
+    },
+  }).rentalTerms;
 
 const properties = [
   {
@@ -35,6 +55,7 @@ const properties = [
     ],
     ownerId: OWNER_ID,
     ownerUsername: OWNER_USERNAME,
+    rentalTerms: createDefaultRentalTerms(6),
     status: "available",
   },
   {
@@ -64,6 +85,7 @@ const properties = [
     ],
     ownerId: OWNER_ID,
     ownerUsername: OWNER_USERNAME,
+    rentalTerms: createDefaultRentalTerms(6),
     status: "available",
   },
   {
@@ -71,7 +93,7 @@ const properties = [
     description:
       "Well-maintained house with private compound, paved parking, and easy access to schools.",
     type: "house",
-    purpose: "sell",
+    purpose: "sale",
     price: 240000000,
     bedrooms: 4,
     area: 320,
@@ -100,7 +122,7 @@ const properties = [
     description:
       "Investment-ready boutique hotel property with reception area and modern finishing.",
     type: "hotel",
-    purpose: "sell",
+    purpose: "sale",
     price: 950000000,
     bedrooms: 18,
     area: 950,
@@ -122,6 +144,7 @@ const properties = [
     ],
     ownerId: OWNER_ID,
     ownerUsername: OWNER_USERNAME,
+    rentalTerms: createDefaultRentalTerms(6),
     status: "available",
   },
   {
@@ -151,6 +174,7 @@ const properties = [
     ],
     ownerId: OWNER_ID,
     ownerUsername: OWNER_USERNAME,
+    rentalTerms: createDefaultRentalTerms(6),
     status: "available",
   },
   {
@@ -187,7 +211,7 @@ const properties = [
     description:
       "Spacious executive house with servant quarter and landscaped garden in a quiet neighborhood.",
     type: "house",
-    purpose: "sell",
+    purpose: "sale",
     price: 315000000,
     bedrooms: 5,
     area: 410,
@@ -216,7 +240,7 @@ const properties = [
     description:
       "Serviced apartment units designed for short and long stays with parking and security.",
     type: "apartment",
-    purpose: "sell",
+    purpose: "sale",
     price: 185000000,
     bedrooms: 3,
     area: 138,
@@ -238,6 +262,7 @@ const properties = [
     ],
     ownerId: OWNER_ID,
     ownerUsername: OWNER_USERNAME,
+    rentalTerms: createDefaultRentalTerms(6),
     status: "available",
   },
   {
@@ -267,6 +292,7 @@ const properties = [
     ],
     ownerId: OWNER_ID,
     ownerUsername: OWNER_USERNAME,
+    rentalTerms: createDefaultRentalTerms(6),
     status: "available",
   },
   {

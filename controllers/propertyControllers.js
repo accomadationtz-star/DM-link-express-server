@@ -8,6 +8,36 @@ import {
   deleteFromCloudinary,
   generateVideoThumbnail,
 } from '../utils/cloudinaryUpload.js';
+import {
+  normalizePurpose,
+  normalizePropertyCommercialState,
+  parseJsonField,
+  serializeProperty,
+  isSalePurpose,
+} from '../utils/propertyCommercial.js';
+
+const handlePropertyValidationError = (res, error) => {
+  const statusCode = error.name === 'ValidationError' ? 400 : 400;
+
+  return res.status(statusCode).json({
+    success: false,
+    message: error.message,
+  });
+};
+
+const normalizePurposeFilter = purpose => {
+  const normalizedPurpose = normalizePurpose(purpose);
+
+  if (!normalizedPurpose) {
+    return undefined;
+  }
+
+  if (normalizedPurpose === 'sale') {
+    return { $in: ['sale', 'sell'] };
+  }
+
+  return normalizedPurpose;
+};
 
 /**
  * Helper function to cleanup uploaded media on error
@@ -45,6 +75,7 @@ export const uploadProperty = async (req, res) => {
       bedrooms,
       area,
       location,
+      rentalTerms: rawRentalTerms,
     } = req.body;
 
     // Validate required fields
@@ -59,18 +90,29 @@ export const uploadProperty = async (req, res) => {
     console.log('Raw location:', location);
     console.log('Location type:', typeof location);
     
-    let parsedLocation = location;
-    if (typeof location === 'string') {
-      try {
-        parsedLocation = JSON.parse(location);
-        console.log('Parsed location:', parsedLocation);
-      } catch (e) {
-        console.error('Failed to parse location:', e.message);
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid location format',
-        });
-      }
+    let parsedLocation;
+    let parsedRentalTerms;
+
+    try {
+      parsedLocation = parseJsonField(location, 'location');
+      parsedRentalTerms = parseJsonField(rawRentalTerms, 'rentalTerms');
+      console.log('Parsed location:', parsedLocation);
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    let commercialState;
+    try {
+      commercialState = normalizePropertyCommercialState({
+        purpose,
+        price,
+        rentalTerms: parsedRentalTerms,
+      });
+    } catch (error) {
+      return handlePropertyValidationError(res, error);
     }
 
     // NOW validate the parsed location
@@ -195,8 +237,8 @@ export const uploadProperty = async (req, res) => {
       title,
       description,
       type,
-      purpose,
-      price: Number(price),
+      purpose: commercialState.purpose,
+      price: commercialState.price,
       bedrooms: Number(bedrooms) || 0,
       area: Number(area),
       ownerId: req.user.id, // Set owner from authenticated user
@@ -204,6 +246,8 @@ export const uploadProperty = async (req, res) => {
       location: parsedLocation,
       cover: coverImage,
       media: uploadedMedia,
+      rentalTerms: commercialState.rentalTerms,
+      pricingSummary: commercialState.pricingSummary,
       // Add listedBy if you have auth middleware: listedBy: req.user._id,
     });
 
@@ -212,10 +256,14 @@ export const uploadProperty = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'Property created successfully',
-      data: property,
+      data: serializeProperty(property),
     });
   } catch (error) {
     console.error('Error creating property:', error);
+    if (error.name === 'ValidationError' || error.message?.includes('rentalTerms') || error.message?.includes('purpose') || error.message?.includes('minimumAdvanceMonths') || error.message?.includes('agentFee') || error.message?.includes('viewingFee')) {
+      return handlePropertyValidationError(res, error);
+    }
+
     res.status(500).json({
       success: false,
       message: 'Server error',
@@ -246,7 +294,7 @@ export const getProperties = async (req, res) => {
     const query = { status: 'available' };
 
     if (type) query.type = type;
-    if (purpose) query.purpose = purpose;
+    if (purpose) query.purpose = normalizePurposeFilter(purpose);
     if (region) query['location.region'] = region;
     if (district) query['location.district'] = district;
 
@@ -270,7 +318,7 @@ export const getProperties = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: properties,
+      data: properties.map(serializeProperty),
       totalPages: Math.ceil(count / limitNumber),
       currentPage: pageNumber,
       total: count,
@@ -290,6 +338,7 @@ export const getProperties = async (req, res) => {
  * @access  Public
  */
 export const getAllProperties = async (req, res) => {
+  console.log('Received request to get all properties');
   try {
     const { page = 1, limit = 10 } = req.query;
 
@@ -304,7 +353,7 @@ export const getAllProperties = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: properties,
+      data: properties.map(serializeProperty),
       totalPages: Math.ceil(count / limit),
       currentPage: Number(page),
       total: count,
@@ -341,7 +390,7 @@ export const getAgentProperties = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: properties,
+      data: properties.map(serializeProperty),
       totalPages: Math.ceil(count / limitNumber),
       currentPage: pageNumber,
       total: count,
@@ -376,7 +425,7 @@ export const getPropertyDetails = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: property,
+      data: serializeProperty(property),
     });
   } catch (error) {
     console.error('Error fetching property:', error);
@@ -408,7 +457,7 @@ export const getProperty = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: property,
+      data: serializeProperty(property),
     });
   } catch (error) {
     console.error('Error fetching property:', error);
@@ -446,20 +495,21 @@ export const updateProperty = async (req, res) => {
     }
 
     // Only allow certain fields to be updated
-    const { title, description, price, bedrooms, area } = req.body;
+    const {
+      title,
+      description,
+      purpose,
+      price,
+      bedrooms,
+      area,
+      rentalTerms: rawRentalTerms,
+    } = req.body;
 
     // Validate inputs
     if (title === '') {
       return res.status(400).json({
         success: false,
         message: 'Title is required',
-      });
-    }
-
-    if (price !== undefined && price < 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Price cannot be negative',
       });
     }
 
@@ -481,23 +531,53 @@ export const updateProperty = async (req, res) => {
     const updateData = {};
     if (title !== undefined) updateData.title = title;
     if (description !== undefined) updateData.description = description;
-    if (price !== undefined) updateData.price = price;
     if (bedrooms !== undefined) updateData.bedrooms = bedrooms;
     if (area !== undefined) updateData.area = area;
 
-    const updatedProperty = await Property.findByIdAndUpdate(
-      id,
-      updateData,
-      { new: true, runValidators: true }
-    );
+    let parsedRentalTerms;
+    try {
+      parsedRentalTerms = parseJsonField(rawRentalTerms, 'rentalTerms');
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    try {
+      const nextPurpose = purpose !== undefined ? purpose : property.purpose;
+      const nextPrice = price !== undefined ? price : property.price;
+      const nextRentalTerms = rawRentalTerms !== undefined ? parsedRentalTerms : property.rentalTerms;
+
+      const commercialState = normalizePropertyCommercialState({
+        purpose: nextPurpose,
+        price: nextPrice,
+        rentalTerms: nextRentalTerms,
+        existingProperty: property,
+      });
+
+      updateData.purpose = commercialState.purpose;
+      updateData.price = commercialState.price;
+      updateData.rentalTerms = commercialState.rentalTerms;
+      updateData.pricingSummary = commercialState.pricingSummary;
+    } catch (error) {
+      return handlePropertyValidationError(res, error);
+    }
+
+    Object.assign(property, updateData);
+    await property.save();
 
     return res.status(200).json({
       success: true,
       message: 'Property updated successfully',
-      data: updatedProperty,
+      data: serializeProperty(property),
     });
   } catch (error) {
     console.error('Error updating property:', error);
+    if (error.name === 'ValidationError' || error.message?.includes('rentalTerms') || error.message?.includes('purpose') || error.message?.includes('minimumAdvanceMonths') || error.message?.includes('agentFee') || error.message?.includes('viewingFee')) {
+      return handlePropertyValidationError(res, error);
+    }
+
     return res.status(500).json({
       success: false,
       message: 'Error updating property',
@@ -606,7 +686,7 @@ export const updatePropertyStatus = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: `Property status updated to ${status}`,
-      data: property,
+      data: serializeProperty(property),
     });
   } catch (error) {
     console.error('Error updating property status:', error);

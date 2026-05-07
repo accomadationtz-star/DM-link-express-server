@@ -340,6 +340,7 @@ const refreshTokenController = async (req, res) => {
 };
 
 const googleAuth = async (req, res) => {
+  console.log("Google auth request body:", req.body);
   try {
     const { idToken } = req.body;
 

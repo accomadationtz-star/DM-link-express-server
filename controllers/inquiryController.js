@@ -1,16 +1,26 @@
 import Inquiry from "../models/Inquiry.js";
 import Property from "../models/Property.js";
 import User from "../models/User.js";
+import ReviewTask from "../models/ReviewTask.js";
 import { sendSMS } from "../utils/sendSMS.js";
+import {
+  normalizePurpose,
+  serializeProperty,
+  parseJsonField,
+  validateClientAcknowledgement,
+  buildCommercialSnapshot,
+  isRentPurpose,
+} from "../utils/propertyCommercial.js";
 
 const enrichInquiryWithPropertyMeta = (inquiry) => ({
   ...inquiry,
   propertySnapshot: {
     ...inquiry?.propertySnapshot,
-    cover: inquiry?.propertyId?.cover,
-    purpose: inquiry?.propertyId?.purpose || inquiry?.propertySnapshot?.purpose,
+    cover: inquiry?.propertySnapshot?.cover || inquiry?.propertyId?.cover,
+    purpose: normalizePurpose(inquiry?.propertyId?.purpose || inquiry?.propertySnapshot?.purpose),
     status: inquiry?.propertyId?.status,
   },
+  commercialSnapshot: inquiry?.commercialSnapshot || null,
   agentSnapshot: {
     ...inquiry?.agentSnapshot,
     phone: inquiry?.agentId?.phoneNumber,
@@ -99,7 +109,7 @@ export const createInquiry = async (req, res) => {
   try {
     const userId = req.user.id;
     console.log("Authenticated user ID:", userId);
-    const { propertyId } = req.body;
+    const { propertyId, clientAcknowledgement: rawClientAcknowledgement } = req.body;
 
     if (!propertyId) {
       return res.status(400).json({
@@ -108,26 +118,28 @@ export const createInquiry = async (req, res) => {
       });
     }
 
-    const property = await Property.findById(propertyId);
+    const propertyDocument = await Property.findById(propertyId);
 
-    if (!property) {
+    if (!propertyDocument) {
       return res.status(404).json({
         success: false,
         message: "Property not found",
       });
     }
 
-    if (["pending", "sold", "rented"].includes(property.status)) {
-      return res.status(400).json({
-        success: false,
-        message: `This property is ${property.status} and unavailable for inquiry`,
-      });
-    }
+    const property = serializeProperty(propertyDocument);
 
-    if (property.ownerId.toString() === userId.toString()) {
+    if (propertyDocument.ownerId.toString() === userId.toString()) {
       return res.status(400).json({
         success: false,
         message: "You cannot inquire your own property",
+      });
+    }
+
+    if (property.status !== "available") {
+      return res.status(400).json({
+        success: false,
+        message: "Property is no longer available",
       });
     }
 
@@ -138,8 +150,7 @@ export const createInquiry = async (req, res) => {
       });
     }
 
-    const intent =
-      property.purpose === "rent" ? "rent" : "buy";
+    const intent = isRentPurpose(property.purpose) ? "rent" : "buy";
 
     const exists = await Inquiry.findOne({
       propertyId,
@@ -151,6 +162,39 @@ export const createInquiry = async (req, res) => {
       return res.status(409).json({
         success: false,
         message: "You already have an active inquiry for this property",
+      });
+    }
+
+    let parsedClientAcknowledgement;
+    try {
+      parsedClientAcknowledgement = parseJsonField(rawClientAcknowledgement, 'clientAcknowledgement');
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    let normalizedClientAcknowledgement = null;
+    let commercialSnapshot = null;
+
+    try {
+      normalizedClientAcknowledgement = validateClientAcknowledgement({
+        property,
+        clientAcknowledgement: parsedClientAcknowledgement,
+      });
+
+      if (normalizedClientAcknowledgement) {
+        commercialSnapshot = buildCommercialSnapshot({
+          property,
+          clientId: userId,
+          clientAcknowledgement: normalizedClientAcknowledgement,
+        });
+      }
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
       });
     }
 
@@ -185,7 +229,7 @@ export const createInquiry = async (req, res) => {
         const smsMessage = `New inquiry on DM Link for your property "${property.title}": ${message} Client Phone: ${req.user.phoneNumber}`;
         const formattedPhone = formatPhoneNumber(agent.phoneNumber);
         console.log("Sending SMS to agent:", formattedPhone);
-        await sendSMS({ to: formattedPhone, message: smsMessage });
+        //await sendSMS({ to: formattedPhone, message: smsMessage });
         console.log("SMS sent successfully to agent:", formattedPhone);
         smsSent = true;
       } catch (smsError) {
@@ -202,12 +246,15 @@ export const createInquiry = async (req, res) => {
       propertySnapshot: {
         title: property.title,
         price: property.price,
-        purpose: property.purpose,
+        purpose: normalizePurpose(property.purpose),
+        cover: property.cover ? { url: property.cover.url } : undefined,
         location: {
           region: property.location.region,
           district: property.location.district,
         },
       },
+
+      commercialSnapshot,
 
       agentSnapshot: {
         username: property.ownerUsername,
@@ -297,13 +344,47 @@ export const getUserInquiries = async (req, res) => {
       .lean();
 
     const enrichedInquiries = inquiries.map(enrichInquiryWithPropertyMeta);
+
+    // Attach review task metadata to booked inquiries
+    const bookedIds = enrichedInquiries
+      .filter((i) => i.status === 'booked' && i.reviewTaskId)
+      .map((i) => i.reviewTaskId);
+
+    let taskMap = {};
+    if (bookedIds.length > 0) {
+      const tasks = await ReviewTask.find({ _id: { $in: bookedIds } })
+        .select('_id status snoozedUntil dismissalCount submittedAt')
+        .lean();
+      tasks.forEach((t) => {
+        taskMap[t._id.toString()] = t;
+      });
+    }
+
+    const result = enrichedInquiries.map((inq) => {
+      if (inq.status === 'booked' && inq.reviewTaskId) {
+        const task = taskMap[inq.reviewTaskId.toString()];
+        return {
+          ...inq,
+          reviewMeta: task
+            ? {
+                taskId: task._id,
+                taskStatus: task.status,
+                snoozedUntil: task.snoozedUntil,
+                dismissalCount: task.dismissalCount,
+                submittedAt: task.submittedAt,
+              }
+            : null,
+        };
+      }
+      return { ...inq, reviewMeta: null };
+    });
     
-    console.log("Found user inquiries:", enrichedInquiries.length);
+    console.log("Found user inquiries:", result.length);
     
     return res.status(200).json({
       success: true,
-      message: `Found ${enrichedInquiries.length} inquiries`,
-      data: enrichedInquiries,
+      message: `Found ${result.length} inquiries`,
+      data: result,
     });
   } catch (error) {
     console.error("Error fetching user inquiries:", error);
@@ -508,12 +589,52 @@ export const updateInquiryStatus = async (req, res) => {
       try {
         const property = await Property.findById(inquiry.propertyId);
         if (property) {
-          property.status = property.purpose === "rent" ? "rented" : "sold";
+          property.status = normalizePurpose(property.purpose) === "rent" ? "rented" : "sold";
           await property.save();
           console.log(`Property status updated to ${property.status} from inquiry booking`);
         }
       } catch (error) {
         console.error("Error updating property status:", error);
+      }
+
+      // Stamp booking metadata on the inquiry
+      inquiry.bookedAt = new Date();
+      inquiry.bookedBy = userId;
+      await inquiry.save();
+
+      // Upsert a ReviewTask for this booking (idempotent — one task per inquiry/client/type)
+      try {
+        const existingTask = await ReviewTask.findOne({
+          inquiryId: inquiry._id,
+          clientId: inquiry.clientId,
+          type: 'post_booking_review',
+        });
+
+        if (!existingTask) {
+          const newTask = await ReviewTask.create({
+            inquiryId: inquiry._id,
+            propertyId: inquiry.propertyId,
+            agentId: inquiry.agentId,
+            clientId: inquiry.clientId,
+            type: 'post_booking_review',
+            status: 'pending',
+            dueAt: inquiry.bookedAt,
+          });
+          inquiry.reviewTaskId = newTask._id;
+          await inquiry.save();
+          console.log('ReviewTask created:', newTask._id);
+        } else if (existingTask.status !== 'submitted') {
+          // Re-activate a snoozed/expired task (but never overwrite a submitted one)
+          existingTask.status = 'pending';
+          existingTask.dueAt = inquiry.bookedAt;
+          await existingTask.save();
+          inquiry.reviewTaskId = existingTask._id;
+          await inquiry.save();
+          console.log('ReviewTask reactivated:', existingTask._id);
+        }
+      } catch (taskError) {
+        console.error('Error upserting ReviewTask:', taskError);
+        // Non-fatal — booking still succeeds
       }
     }
     
@@ -569,7 +690,21 @@ export const cancelInquiry = async (req, res) => {
     
     inquiry.status = "cancelled";
     await inquiry.save();
-    
+
+    // Expire any pending/snoozed review task for this inquiry
+    try {
+      await ReviewTask.updateMany(
+        {
+          inquiryId: inquiry._id,
+          status: { $in: ['pending', 'snoozed'] },
+        },
+        { $set: { status: 'expired' } }
+      );
+    } catch (taskError) {
+      console.error('Error expiring ReviewTask on cancel:', taskError);
+      // Non-fatal
+    }
+
     console.log("Inquiry cancelled successfully");
     
     return res.status(200).json({

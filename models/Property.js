@@ -1,4 +1,10 @@
 import mongoose from 'mongoose';
+import {
+  normalizePurpose,
+  normalizeRentalTerms,
+  buildPricingSummary,
+  isRentPurpose,
+} from '../utils/propertyCommercial.js';
 
 
 const mediaSchema = new mongoose.Schema(
@@ -9,6 +15,121 @@ const mediaSchema = new mongoose.Schema(
       type: String,
       enum: ["image", "video"],
       required: true,
+    },
+  },
+  { _id: false }
+);
+
+const rentalViewingFeeSchema = new mongoose.Schema(
+  {
+    required: {
+      type: Boolean,
+      default: false,
+    },
+    amount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    currency: {
+      type: String,
+      enum: ['TZS'],
+      default: 'TZS',
+    },
+    dueStage: {
+      type: String,
+      enum: ['before_viewing'],
+      default: 'before_viewing',
+    },
+  },
+  { _id: false }
+);
+
+const rentalAgentFeeSchema = new mongoose.Schema(
+  {
+    required: {
+      type: Boolean,
+      default: true,
+    },
+    mode: {
+      type: String,
+      enum: ['fixed', 'one_month_rent'],
+      default: 'one_month_rent',
+    },
+    amount: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+    currency: {
+      type: String,
+      enum: ['TZS'],
+      default: 'TZS',
+    },
+    dueStage: {
+      type: String,
+      enum: ['on_closing'],
+      default: 'on_closing',
+    },
+  },
+  { _id: false }
+);
+
+const rentalTermsSchema = new mongoose.Schema(
+  {
+    minimumAdvanceMonths: {
+      type: Number,
+      min: 1,
+    },
+    viewingFee: {
+      type: rentalViewingFeeSchema,
+    },
+    agentFee: {
+      type: rentalAgentFeeSchema,
+    },
+    notes: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    termsVersion: {
+      type: Number,
+      default: 1,
+      min: 1,
+    },
+  },
+  { _id: false }
+);
+
+const pricingSummarySchema = new mongoose.Schema(
+  {
+    monthlyRent: {
+      type: Number,
+      min: 0,
+    },
+    minimumAdvanceMonths: {
+      type: Number,
+      min: 1,
+    },
+    advanceRentTotal: {
+      type: Number,
+      min: 0,
+    },
+    viewingFeeTotal: {
+      type: Number,
+      min: 0,
+    },
+    agentFeeTotal: {
+      type: Number,
+      min: 0,
+    },
+    estimatedMoveInTotal: {
+      type: Number,
+      min: 0,
+    },
+    currency: {
+      type: String,
+      enum: ['TZS'],
     },
   },
   { _id: false }
@@ -33,8 +154,9 @@ const propertySchema = new mongoose.Schema(
     },
     purpose: {
       type: String,
-      enum: ['rent', 'sell'],
+      enum: ['rent', 'sale'],
       required: true,
+      set: normalizePurpose,
     },
     price: {
       type: Number,
@@ -85,6 +207,14 @@ const propertySchema = new mongoose.Schema(
     },
 
     media: [mediaSchema],
+    rentalTerms: {
+      type: rentalTermsSchema,
+      default: undefined,
+    },
+    pricingSummary: {
+      type: pricingSummarySchema,
+      default: undefined,
+    },
     status: {
       type: String,
       enum: ['available', 'rented', 'sold', 'pending'],
@@ -103,6 +233,33 @@ const propertySchema = new mongoose.Schema(
 propertySchema.index({ status: 1, createdAt: -1 });
 propertySchema.index({ type: 1, price: 1 });
 propertySchema.index({ location: "text", title: "text", description: "text" });
+
+propertySchema.pre('validate', function preValidateProperty(next) {
+  try {
+    this.purpose = normalizePurpose(this.purpose);
+
+    if (isRentPurpose(this.purpose)) {
+      const normalizedRentalTerms = normalizeRentalTerms(this.rentalTerms);
+      this.rentalTerms = normalizedRentalTerms;
+      this.pricingSummary = buildPricingSummary({
+        purpose: this.purpose,
+        price: this.price,
+        rentalTerms: normalizedRentalTerms,
+      });
+    } else {
+      if (this.rentalTerms !== undefined && this.rentalTerms !== null) {
+        return next(new Error('rentalTerms are only allowed for sale properties'));
+      }
+
+      this.rentalTerms = undefined;
+      this.pricingSummary = undefined;
+    }
+
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+});
 
 export default mongoose.model('Property', propertySchema);
 

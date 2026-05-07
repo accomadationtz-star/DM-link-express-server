@@ -10,6 +10,8 @@ import inquiryRoutes from "./routes/inquiryRoutes.js";
 import agentDashboardRoutes from "./routes/agentDashboardRoutes.js";
 import agentApplicationRoutes from "./routes/agentApplicationRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
+import reviewRoutes from "./routes/reviewRoutes.js";
+import agentPublicRoutes from "./routes/agentPublicRoutes.js";
 
 dotenv.config();
 const app = express();
@@ -44,6 +46,8 @@ app.use("/api/inquiries", inquiryRoutes);
 app.use("/api/agent", agentDashboardRoutes);
 app.use("/api/agent", agentApplicationRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/reviews", reviewRoutes);
+app.use("/api/agents", agentPublicRoutes);
 
 // Global error handler
 app.use((err, req, res, next) => {
